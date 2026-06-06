@@ -1,0 +1,31 @@
+services:
+
+  backend:
+    build:
+      context: ..
+      dockerfile: docker/backend.Dockerfile
+
+    container_name: spam-backend
+
+    ports:
+      - "8000:8000"
+
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ..
+      dockerfile: docker/frontend.Dockerfile
+
+    container_name: spam-frontend
+
+    ports:
+      - "8501:8501"
+
+    environment:
+      API_BASE_URL: http://backend:8000
+
+    depends_on:
+      - backend
+
+    restart: unless-stopped
