@@ -1,9 +1,12 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException,Response,Request
 from datetime import datetime,UTC
 import time
 import logging
+from app.metrics import PREDICTION_COUNT, REQUEST_COUNT, REQUEST_LATENCY
 from models.services import predict_spam, batch_pred_spam, get_model, get_vectorizer
 from schemas.schema import PredictionResponse, BatchPredictionResponse, TextRequest, BatchRequest
+from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+import os
 
 app = FastAPI(
     title="spam_detector_api",
@@ -11,10 +14,15 @@ app = FastAPI(
     version="1.0.0"
 )
 
+os.makedirs("logs", exist_ok=True)
+
 logging.basicConfig(
-    filename="logs/spam_detector_api.log",
     level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[
+        logging.FileHandler("logs/spam_detector_api.log"),
+        logging.StreamHandler()
+    ]
 )
 
 
@@ -23,13 +31,24 @@ logger = logging.getLogger(__name__)
 @app.middleware("http")
 async def log_requests(request, call_next):
     start_time =  time.time()
-    response = await call_next(request)
+    try:
+        response = await call_next(request)
+    except Exception:
+        logger.exception("Error occurred while processing request")
+        raise
     end_time = time.time()
     process_time = end_time - start_time
+    REQUEST_COUNT.labels(
+        method=request.method,
+        endpoint=request.url.path, 
+        http_status=response.status_code).inc()
+    REQUEST_LATENCY.labels(
+        endpoint=request.url.path
+    ).observe(process_time)
     logger.info(
         f"{request.method} {request.url} - {response.status_code} - {process_time:.2f}s"
     )
-    response.headers["X-Process-Time"] = str(process_time)
+    response.headers["X-Process-Time"] = f"{process_time:.4f}s"
     return response
 
 @app.on_event("startup")
@@ -42,6 +61,10 @@ async def startup_event():
     except Exception as e:
         logger.critical(f"Startup failed: {str(e)}")
         raise RuntimeError("Failed to start application")
+    
+@app.on_event("shutdown")
+async def shutdown_event():
+    logger.info("Spam Detector API shutting down...")
 
 @app.get("/")
 def home():
@@ -67,6 +90,15 @@ def health_check():
     }
 
 
+@app.get("/metrics")
+def metrics():
+    logger.info("Metrics endpoint accessed.")
+    return Response(
+        content=generate_latest(),
+        media_type=CONTENT_TYPE_LATEST
+    )
+
+
 @app.post("/single_predict", response_model= PredictionResponse)
 async def predict(data: TextRequest):
     logger.info("Single predict endpoint accessed.")
@@ -78,14 +110,18 @@ async def predict(data: TextRequest):
     logger.info("Prediction Request Received")
     try:
         result = predict_spam(data.text)
+        PREDICTION_COUNT.labels(label=result['label']).inc()
     
     except HTTPException:
         raise 
-
-    except Exception as e:
-        logger.error(f"Error during prediction")
-        raise HTTPException(status_code=500, detail=str(e))
     
+    except Exception:
+        logger.exception("Single prediction failed")
+        raise HTTPException(
+            status_code=500,
+            detail="Internal Server Error"
+        )
+
     logger.info("Prediction completed successfully.")
     return result
 
@@ -109,17 +145,20 @@ async def batch_predict(data: BatchRequest):
 
     try:
         results = batch_pred_spam(data.texts)
+        for prediction in results["results"]:
+            PREDICTION_COUNT.labels(
+            label=prediction["prediction"]
+            ).inc()
 
     except HTTPException:
         raise
 
     except Exception as e:
-        import traceback
-        # logger.error(f"Error during batch prediction")
-        return{
-            "error":str(e),
-            "traceback": traceback.format_exc()
-        }
+        logger.exception("Batch prediction failed")
+        raise HTTPException(
+            status_code=500,
+            detail="Internal Server Error"
+        )
     
     logger.info("Batch prediction completed successfully.")
     return results
