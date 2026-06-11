@@ -7,6 +7,9 @@ from models.services import predict_spam, batch_pred_spam, get_model, get_vector
 from schemas.schema import PredictionResponse, BatchPredictionResponse, TextRequest, BatchRequest
 from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 import os
+from app.prediction_log import log_prediction
+
+
 
 app = FastAPI(
     title="spam_detector_api",
@@ -111,6 +114,7 @@ async def predict(data: TextRequest):
     try:
         result = predict_spam(data.text)
         PREDICTION_COUNT.labels(label=result['label']).inc()
+        log_prediction(text_length=len(data.text),label=result["label"])
     
     except HTTPException:
         raise 
@@ -145,10 +149,12 @@ async def batch_predict(data: BatchRequest):
 
     try:
         results = batch_pred_spam(data.texts)
-        for prediction in results["results"]:
+        for i, prediction in enumerate(results["results"]):
             PREDICTION_COUNT.labels(
             label=prediction["prediction"]
             ).inc()
+            log_prediction(text_length=len(data.texts[i]),label=prediction["prediction"])
+
 
     except HTTPException:
         raise
