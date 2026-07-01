@@ -1,0 +1,57 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: spam-backend
+
+spec:
+  replicas: 2
+
+  selector:
+    matchLabels:
+      app: spam-backend
+
+  template:
+    metadata:
+      labels:
+        app: spam-backend
+
+    spec:
+      containers:
+        - name: spam-backend
+          image: 820315588027.dkr.ecr.eu-north-1.amazonaws.com/spam-backend:1.0
+
+          ports:
+            - containerPort: 8000
+
+          env:
+            - name: MODEL_PATH
+              value: /app/models/svm_model.pkl
+
+            - name: VECTORIZER_PATH
+              value: /app/models/tfidf_vectorizer.pkl
+
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+
+            limits:
+              cpu: "1000m"
+              memory: "1536Mi"
+
+---
+apiVersion: v1
+kind: Service
+
+metadata:
+  name: spam-backend-svc
+
+spec:
+  selector:
+    app: spam-backend
+
+  ports:
+    - port: 80
+      targetPort: 8000
+
+  type: ClusterIP
